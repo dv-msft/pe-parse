@@ -480,6 +480,7 @@ const std::string &GetRichProductName(std::uint16_t buildNum) {
   }
 }
 
+std::uint32_t osError;
 std::uint32_t err = 0;
 std::string err_loc;
 
@@ -497,6 +498,7 @@ static const char *pe_err_str[] = {
     "Invalid buffer",
     "Invalid address",
     "Invalid size",
+    "Invalid data",
 };
 
 std::uint32_t GetPEErr() {
@@ -504,7 +506,10 @@ std::uint32_t GetPEErr() {
 }
 
 std::string GetPEErrString() {
-  return pe_err_str[err];
+  std::string errorString = std::format("peparse error:{} ({}), OS Error: {} (0x{:08X})",
+                                        err, pe_err_str[err], osError, osError);
+
+    return errorString;
 }
 
 std::string GetPEErrLoc() {
@@ -1089,13 +1094,13 @@ bool readFileHeader(bounded_buffer *b, file_header &header) {
 
 bool readNtHeader(bounded_buffer *b, nt_header_32 &header) {
   if (b == nullptr) {
+      PE_ERR(PEERR_INVALID_DATA);
     return false;
   }
 
   std::uint32_t pe_magic;
   std::uint32_t curOffset = 0;
   if (!readDword(b, curOffset, pe_magic) || pe_magic != NT_MAGIC) {
-    PE_ERR(PEERR_READ);
     return false;
   }
 
@@ -1104,7 +1109,6 @@ bool readNtHeader(bounded_buffer *b, nt_header_32 &header) {
       splitBuffer(b, offsetof(nt_header_32, FileHeader), b->bufLen);
 
   if (fhb == nullptr) {
-    PE_ERR(PEERR_MEM);
     return false;
   }
 
@@ -1152,7 +1156,6 @@ bool readNtHeader(bounded_buffer *b, nt_header_32 &header) {
    * Read the Magic to determine if it is 32 or 64.
    */
   if (!readWord(ohb, 0, header.OptionalMagic)) {
-    PE_ERR(PEERR_READ);
     if (ohb != nullptr) {
       deleteBuffer(ohb);
     }
@@ -1233,6 +1236,7 @@ bool readRichHeader(bounded_buffer *rich_buf,
                     std::uint32_t key,
                     rich_header &rich_hdr) {
   if (rich_buf == nullptr) {
+    PE_ERR(PEERR_READ);
     return false;
   }
 
@@ -1349,10 +1353,12 @@ bool readDosHeader(bounded_buffer *file, dos_header &dos_hdr) {
 
 bool getHeader(bounded_buffer *file, pe_header &p, bounded_buffer *&rem) {
   if (file == nullptr) {
+    PE_ERR(PEERR_INVALID_DATA);
     return false;
   }
 
   // read the DOS header
+  // FIXME!!! - return value not checked
   readDosHeader(file, p.dos);
 
   if (p.dos.e_magic != MZ_MAGIC) {
@@ -1400,10 +1406,14 @@ bool getHeader(bounded_buffer *file, pe_header &p, bounded_buffer *&rem) {
     bounded_buffer *richBuf =
         splitBuffer(file, 0x80, rich_end_signature_offset + 4);
     if (richBuf == nullptr) {
+      PE_ERR(PEERR_HDR);
       return false;
     }
 
-    readRichHeader(richBuf, xor_key, p.rich);
+    if (!readRichHeader(richBuf, xor_key, p.rich)) {
+        return false;
+    }
+
     if (richBuf != nullptr) {
       deleteBuffer(richBuf);
     }
@@ -2475,6 +2485,9 @@ bool getSymbolTable(parsed_pe *p) {
 }
 
 parsed_pe *ParsePEFromBuffer(bounded_buffer *buffer) {
+
+  PE_ERR(PEERR_NONE);
+
   // First, create a new parsed_pe structure
   // We pass std::nothrow parameter to new so in case of failure it returns
   // nullptr instead of throwing exception std::bad_alloc.
@@ -2564,6 +2577,8 @@ parsed_pe *ParsePEFromBuffer(bounded_buffer *buffer) {
 }
 
 parsed_pe *ParsePEFromFile(const char *filePath) {
+
+  PE_ERR(PEERR_NONE);
   auto buffer = readFileToFileBuffer(filePath);
 
   if (buffer == nullptr) {
@@ -2823,6 +2838,7 @@ bool GetDataDirectoryEntry(parsed_pe *pe,
   raw_entry.clear();
 
   if (pe == nullptr) {
+    // FIXME!!!
     PE_ERR(PEERR_NONE);
     return false;
   }
@@ -2855,7 +2871,7 @@ bool GetDataDirectoryEntry(parsed_pe *pe,
     auto *buf = splitBuffer(
         pe->fileBuffer, dir.VirtualAddress, dir.VirtualAddress + dir.Size);
     if (buf == nullptr) {
-      PE_ERR(PEERR_SIZE);
+      // err set by splitBuffer
       return false;
     }
 

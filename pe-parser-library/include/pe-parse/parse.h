@@ -27,6 +27,7 @@ THE SOFTWARE.
 #include <cstdint>
 #include <map>
 #include <string>
+#include <format>
 
 #include "nt-headers.h"
 #include "to_string.h"
@@ -35,10 +36,14 @@ THE SOFTWARE.
 #define __typeof__(x) std::remove_reference<decltype(x)>::type
 #endif
 
-#define PE_ERR(x)               \
-  err = static_cast<pe_err>(x); \
-  err_loc.assign(__func__);     \
-  err_loc += ":" + to_string<std::uint32_t>(__LINE__, std::dec);
+#define PE_ERR(x)                                                 \
+  err = x;                                                        \
+  err_loc = std::format("{}()[Line:{}]-> ", __func__, __LINE__);
+
+#define PE_ERR_EX(x, y)                                          \
+  err = x;                                                       \
+  osError = y;                                                   \
+  err_loc = std::format("{}()[Line:{}]-> ", __func__, __LINE__);
 
 #define READ_WORD(b, o, inst, member)                                          \
   if (!readWord(b,                                                             \
@@ -150,6 +155,7 @@ enum pe_err {
   PEERR_BUFFER = 10,
   PEERR_ADDRESS = 11,
   PEERR_SIZE = 12,
+  PEERR_INVALID_DATA = 13,
 };
 
 bool readByte(bounded_buffer *b, std::uint32_t offset, std::uint8_t &out);

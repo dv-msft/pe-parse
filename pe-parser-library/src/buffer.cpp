@@ -73,6 +73,7 @@ inline uint64_t byteSwapUint64(std::uint64_t val) {
 namespace peparse {
 
 extern std::uint32_t err;
+extern std::uint32_t osError;
 extern std::string err_loc;
 
 struct buffer_detail {
@@ -202,12 +203,16 @@ bounded_buffer *readFileToFileBuffer(const char *filePath) {
                          FILE_ATTRIBUTE_NORMAL,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) {
+    DWORD winError = GetLastError();
+    PE_ERR_EX(PEERR_OPEN, winError);
     return nullptr;
   }
 
   DWORD fileSize = GetFileSize(h, nullptr);
 
   if (fileSize == INVALID_FILE_SIZE) {
+    DWORD winError = GetLastError();
+    PE_ERR_EX(PEERR_SIZE, winError);
     CloseHandle(h);
     return nullptr;
   }
@@ -226,6 +231,7 @@ bounded_buffer *readFileToFileBuffer(const char *filePath) {
   bounded_buffer *p = new (std::nothrow) bounded_buffer();
   if (p == nullptr) {
     PE_ERR(PEERR_MEM);
+    CloseHandle(h);
     return nullptr;
   }
 
@@ -235,6 +241,7 @@ bounded_buffer *readFileToFileBuffer(const char *filePath) {
   if (d == nullptr) {
     delete p;
     PE_ERR(PEERR_MEM);
+    CloseHandle(h);
     return nullptr;
   }
   memset(d, 0, sizeof(buffer_detail));
@@ -247,8 +254,11 @@ bounded_buffer *readFileToFileBuffer(const char *filePath) {
   HANDLE hMap = CreateFileMapping(h, nullptr, PAGE_READONLY, 0, 0, nullptr);
 
   if (hMap == nullptr) {
+      DWORD winError = GetLastError();
+      PE_ERR_EX(PEERR_MEM, winError);
+      delete d;
+      delete p;
     CloseHandle(h);
-    PE_ERR(PEERR_MEM);
     return nullptr;
   }
 
@@ -257,7 +267,12 @@ bounded_buffer *readFileToFileBuffer(const char *filePath) {
   LPVOID ptr = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
 
   if (ptr == nullptr) {
-    PE_ERR(PEERR_MEM);
+    DWORD winError = GetLastError();
+    PE_ERR_EX(PEERR_MEM, winError);
+    CloseHandle(hMap);
+    delete d;
+    delete p;
+    CloseHandle(h);
     return nullptr;
   }
 
@@ -327,17 +342,20 @@ bounded_buffer *makeBufferFromPointer(std::uint8_t *data, std::uint32_t sz) {
 bounded_buffer *
 splitBuffer(bounded_buffer *b, std::uint32_t from, std::uint32_t to) {
   if (b == nullptr) {
+    PE_ERR(PEERR_INVALID_DATA);
     return nullptr;
   }
 
   // safety checks
   if (to < from || to > b->bufLen) {
+    PE_ERR(PEERR_INVALID_DATA);
     return nullptr;
   }
 
   // make a new buffer
   auto newBuff = new (std::nothrow) bounded_buffer();
   if (newBuff == nullptr) {
+    PE_ERR(PEERR_MEM);
     return nullptr;
   }
 
@@ -349,13 +367,22 @@ splitBuffer(bounded_buffer *b, std::uint32_t from, std::uint32_t to) {
 }
 
 void deleteBuffer(bounded_buffer *b) {
+  //
+  // FIXME!!! the windows API calls below _can_ fail and the errors need to be propogated back
+  // to the caller.
+  // 
   if (b == nullptr) {
+    PE_ERR(PEERR_INVALID_DATA);
     return;
   }
 
   if (!b->copy) {
 #ifdef _WIN32
-    UnmapViewOfFile(b->buf);
+    if (!UnmapViewOfFile(b->buf)) {
+      DWORD winError = GetLastError();
+      PE_ERR_EX(PEERR_MEM, winError);
+    }
+
     CloseHandle(b->detail->sec);
     CloseHandle(b->detail->file);
 #else
